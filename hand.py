@@ -22,7 +22,7 @@ FOREARM_COLOR = shade(SKIN_BASE, 4)
 PALM_COLOR = shade(SKIN_BASE, 6)
 
 THUMB_COLOR = shade(SKIN_BASE, -4)
-PHALANX_SHADES = [0, -8, -14]  # для трёх фаланг
+PHALANX_SHADES = [0, -20, -40]  # для трёх фаланг
 
 NAIL_COLOR = np.array([255, 4, 255])
 NAIL_OUTLINE = np.array([170, 120, 110])
@@ -100,6 +100,15 @@ def draw_line(canvas, x0, y0, x1, y1, color, width=1):
             y0 += sy
 
 
+def draw_joint_line(canvas, center, angle_rad, width, color, thickness=1):
+    """Рисует поперечную линию сустава по центру сегмента."""
+    perp = np.array([np.cos(angle_rad), -np.sin(angle_rad)])
+    half = width / 2
+    p1 = center - perp * half
+    p2 = center + perp * half
+    draw_line(canvas, p1[0], p1[1], p2[0], p2[1], color, thickness)
+
+
 def draw_polygon_fill(canvas, points, color):
     if len(points) < 3:
         return
@@ -143,7 +152,8 @@ def rotate_points(points, center, angle_rad):
 
 # ==================== ФАЛАНГА ====================
 
-def draw_phalanx(canvas, start_pos, length, width_start, width_end, angle_rad, skin, outline, is_tip=False, bend_amount=0):
+def draw_phalanx(canvas, start_pos, length, width_start, width_end, angle_rad, skin, outline,
+                 is_tip=False, bend_amount=0, is_base=False, base_scale=0.5, round_tip=True):
     """
     Рисует одну фалангу пальца как кривую Безье.
     is_tip: если True - это последняя фаланга, рисуем ноготь
@@ -175,8 +185,33 @@ def draw_phalanx(canvas, start_pos, length, width_start, width_end, angle_rad, s
     left_curve = bezier_curve(left_bezier, 15)
     right_curve = bezier_curve(right_bezier, 15)
     
-    # Полигон фаланги
-    phalanx_poly = left_curve + list(reversed(right_curve))
+    # Закруглённый кончик для последней фаланги (опционально)
+    tip_arc = []
+    if is_tip and round_tip:
+        radius = width_end / 2
+        for t in np.linspace(-np.pi / 2, np.pi / 2, 12):
+            pt = end_pos + dir_vec * (radius * np.cos(t)) + perp_vec * (radius * np.sin(t))
+            tip_arc.append(pt.tolist())
+    
+    # Закругление у основания (чтобы палец «врастал» плавно)
+    base_arc = []
+    if is_base:
+        radius = width_start * base_scale
+        base_center = np.array(start_pos) - dir_vec * radius
+        for t in np.linspace(np.pi / 2, -np.pi / 2, 10):
+            pt = base_center + perp_vec * (radius * np.cos(t)) + dir_vec * (radius * np.sin(t))
+            base_arc.append(pt.tolist())
+    
+    # Полигон фаланги (с арками на кончике и основании, если нужно)
+    phalanx_poly = []
+    if base_arc:
+        phalanx_poly += base_arc
+        phalanx_poly += left_curve[1:]  # продолжение без стартовой точки
+    else:
+        phalanx_poly += left_curve
+    if is_tip and tip_arc:
+        phalanx_poly += tip_arc
+    phalanx_poly += list(reversed(right_curve))
     
     draw_polygon_fill(canvas, phalanx_poly, skin)
     draw_curve(canvas, left_curve, outline, 1)
@@ -224,9 +259,10 @@ def draw_finger(canvas, base_pos, finger_lengths, finger_widths,
     phalanx_colors = [shade(base_skin, d) for d in PHALANX_SHADES]
     
     # Углы сгиба каждой фаланги (отрицательные - внутрь ладони)
-    bend1 = -bend_amount * np.pi * 0.35
-    bend2 = -bend_amount * np.pi * 0.45
-    bend3 = -bend_amount * np.pi * 0.4
+    # Смягчённые углы, чтобы кончики не задирались вверх и ногти оставались видны
+    bend1 = -bend_amount * np.pi * 0.02
+    bend2 = -bend_amount * np.pi * 0.05
+    bend3 = -bend_amount * np.pi * 0.02
     
     # Укорочение при сгибе к зрителю
     shorten1 = 1 - bend_amount * 0.2
@@ -242,8 +278,11 @@ def draw_finger(canvas, base_pos, finger_lengths, finger_widths,
         finger_lengths[0] * shorten1,
         finger_widths[0], finger_widths[1],
         current_angle, phalanx_colors[0], outline,
-        is_tip=False, bend_amount=bend_amount
+        is_tip=False, bend_amount=bend_amount, is_base=True, base_scale=0.15
     )
+    # линия сустава между 1 и 2 фалангами
+    joint_width1 = (finger_widths[1] + finger_widths[0]) * 0.5
+    draw_joint_line(canvas, np.array(current_pos), current_angle, joint_width1, outline, thickness=1)
     current_angle += bend1
     
     # Фаланга 2 (средняя) - зелёная
@@ -254,6 +293,9 @@ def draw_finger(canvas, base_pos, finger_lengths, finger_widths,
         current_angle, phalanx_colors[1], outline,
         is_tip=False, bend_amount=bend_amount
     )
+    # линия сустава между 2 и 3 фалангами
+    joint_width2 = (finger_widths[2] + finger_widths[1]) * 0.5
+    draw_joint_line(canvas, np.array(current_pos), current_angle, joint_width2, outline, thickness=1)
     current_angle += bend2
     
     # Фаланга 3 (дистальная) - персиковая, с ногтем
@@ -262,15 +304,15 @@ def draw_finger(canvas, base_pos, finger_lengths, finger_widths,
         finger_lengths[2] * shorten3,
         finger_widths[2], finger_widths[3],
         current_angle, phalanx_colors[2], outline,
-        is_tip=True, bend_amount=bend_amount
+        is_tip=True, bend_amount=bend_amount, round_tip=False
     )
 
 
 def draw_thumb(canvas, base_pos, thumb_lengths, thumb_widths,
                arm_angle_rad, bend_amount, skin, outline):
     """Большой палец из 3 фаланг с мягким естественным тоном."""
-    thumb_lift = -bend_amount * -3.5  # Против часовой
-    base_angle = arm_angle_rad + 0.4 + thumb_lift
+    thumb_lift = -bend_amount * -3.8  # Против часовой, но без перекрута
+    base_angle = arm_angle_rad + 0.25 + thumb_lift
     
     current_angle = base_angle
     current_pos = list(base_pos)
@@ -285,8 +327,9 @@ def draw_thumb(canvas, base_pos, thumb_lengths, thumb_widths,
         thumb_lengths[0],
         thumb_widths[0], thumb_widths[1],
         current_angle, thumb_color, outline,
-        is_tip=False, bend_amount=bend_amount
+        is_tip=False, bend_amount=bend_amount, is_base=True, base_scale=0.5
     )
+    draw_joint_line(canvas, np.array(current_pos), current_angle, (thumb_widths[0] + thumb_widths[1]) * 0.5, outline, thickness=1)
     current_angle += bend_phalanx * 0.6
     
     # Фаланга 2 (средняя)
@@ -297,6 +340,7 @@ def draw_thumb(canvas, base_pos, thumb_lengths, thumb_widths,
         current_angle, thumb_color, outline,
         is_tip=False, bend_amount=bend_amount
     )
+    draw_joint_line(canvas, np.array(current_pos), current_angle, (thumb_widths[1] + thumb_widths[2]) * 0.5, outline, thickness=1)
     current_angle += bend_phalanx
     
     # Фаланга 3 (дистальная) - с ногтем
@@ -305,7 +349,7 @@ def draw_thumb(canvas, base_pos, thumb_lengths, thumb_widths,
         thumb_lengths[2],
         thumb_widths[2], thumb_widths[3],
         current_angle, thumb_color, outline,
-        is_tip=True, bend_amount=bend_amount
+        is_tip=True, bend_amount=bend_amount, round_tip=False
     )
 
 
@@ -468,7 +512,8 @@ def draw_hand(canvas, elbow_pos, angle_deg, bend_amount=0):
                    angle_rad, bend_amount, skin_base, outline)
     
     # ===== БОЛЬШОЙ ПАЛЕЦ (2 фаланги) =====
-    thumb_base_local = [palm_width//2 + 5, 25]
+    # Пододвигаем основание ближе к ладони
+    thumb_base_local = [palm_width//2 + 2, 22]
     thumb_base_rotated = rotate_point(thumb_base_local, [0, 0], angle_rad)
     thumb_base = [thumb_base_rotated[0] + wrist_pos[0], thumb_base_rotated[1] + wrist_pos[1]]
     

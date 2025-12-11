@@ -195,6 +195,11 @@ def draw_finger(canvas, start_point, length, angle, color, outline_color, is_thu
         finger_points[4][1] -= length * 0.7 * curl
         finger_points[3][0] -= 8 * curl
 
+    # Не даём сегментам "перегибаться" назад: делаем координаты вдоль пальца неубывающими
+    for i in range(1, len(finger_points)):
+        if finger_points[i][1] < finger_points[i - 1][1]:
+            finger_points[i][1] = finger_points[i - 1][1] + 0.1
+
     # Поворачиваем и смещаем точки пальца
     control_points = []
     for point in finger_points:
@@ -250,6 +255,18 @@ def draw_finger(canvas, start_point, length, angle, color, outline_color, is_thu
 
     # Закрашиваем палец
     draw_filled_polygon(canvas, polygon_points, color)
+
+    # Линии между фалангами (границы фаланг)
+    joint_params = [0.35, 0.7]
+    for jp in joint_params:
+        idx = int(jp * (len(top_curve) - 1))
+        idx = max(0, min(idx, len(top_curve) - 1))
+        t_pt = top_curve[idx]
+        b_pt = bottom_curve[idx]
+        draw_line_bresenham(canvas,
+                            t_pt[0], t_pt[1],
+                            b_pt[0], b_pt[1],
+                            outline_color, linewidth=1)
 
     # Рисуем контур
     for i in range(len(top_curve) - 1):
